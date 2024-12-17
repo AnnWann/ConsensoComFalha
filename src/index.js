@@ -3,7 +3,6 @@ import Swarm from'discovery-swarm'
 import defaults from'dat-swarm-defaults'
 import getPort from 'get-port'
 import readline from'readline'
-import { resolve } from 'path'
 
 /**
  * Here we will save our TCP peer connections
@@ -50,13 +49,13 @@ const askUser = async () => {
   })
 
   rl.question('Send message: ', async message => {
-
+    const messageId = crypto.randomBytes(32).toString('hex')
     const values = [];
     //Run through n times more than the failures
     for (let k = 1; k <= F+1; k++) {
       // Broadcast to peers
       for (let id in peers) {
-        const userMessage = JSON.stringify({ type: 'user', message })
+        const userMessage = JSON.stringify({ type: 'user', message, id: messageId })
         peers[id].conn.write(userMessage)
       }
       // wait a given time because its supposed to be sync
@@ -128,15 +127,20 @@ const sw = Swarm(config)
       }
     }
 
+    const processedMessages = new Set()
+
     conn.on('data', data => {
       // Here we handle incomming messages
 
       const parsedData = JSON.parse(data.toString())
 
       if (parsedData.type === 'user') {
-        log(`Received Message from peer ${peerId}: ${parsedData.message}`)
-        const replyMessage = JSON.stringify({ type: 'reply', message: 1})
-        conn.write(replyMessage)
+        if(!processedMessages.has(parsedData.id)) {
+          log(`Received Message from peer ${peerId}: \n----->${parsedData.message}`)
+          processedMessages.add(parsedData.id)
+          const replyMessage = JSON.stringify({ type: 'reply', message: 1, id: parsedData.id })
+          conn.write(replyMessage)
+        }
       } else if (parsedData.type === 'reply') {
         if (!peers[peerId].replied) {
           peers[peerId].replies = []
