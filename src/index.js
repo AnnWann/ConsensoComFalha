@@ -70,6 +70,7 @@ const askUser = async () => {
       }
     }
 
+
     //decide based on the minimum value
     const decide = Math.min(... values)
 
@@ -134,18 +135,27 @@ const sw = Swarm(config)
 
       const parsedData = JSON.parse(data.toString())
 
+      //simulate failure here by bypassing the message
+      // let parsedData = JSON.parse(data.toString())
+      // if(parsedData.type === 'user') parsedData.type = 'reply'
+
       if (parsedData.type === 'user') {
         if(!processedMessages.has(parsedData.id)) {
           log(`Received Message from peer ${peerId}: \n----->${parsedData.message}`)
           processedMessages.add(parsedData.id)
-          const replyMessage = JSON.stringify({ type: 'reply', message: 1, id: parsedData.id })
+          const replyMessage = JSON.stringify({ type: 'decision', message: 1, id: parsedData.id })
           conn.write(replyMessage)
         }
       } else if (parsedData.type === 'reply') {
         if(!processedMessages.has(parsedData.id)) {
-          const replyMessage = JSON.stringify({ type: 'reply', message: 0, id: parsedData.id })
+          const replyMessage = JSON.stringify({ type: 'decision', message: 0, id: parsedData.id })
           conn.write(replyMessage)
         }
+        if (!peers[peerId].replies) {
+          peers[peerId].replies = []
+        }
+        peers[peerId].replies.push(parsedData.message)
+      } else if (parsedData.type === 'decision') {
         if (!peers[peerId].replies) {
           peers[peerId].replies = []
         }
