@@ -3,6 +3,7 @@ import Swarm from'discovery-swarm'
 import defaults from'dat-swarm-defaults'
 import getPort from 'get-port'
 import readline from'readline'
+import { resolve } from 'path'
 
 /**
  * Here we will save our TCP peer connections
@@ -18,6 +19,10 @@ console.log('Your identity: ' + myId.toString('hex'))
 
 // reference to redline interface
 let rl
+
+// times of failure
+const F = 1
+
 /**
  * Function for safely call console.log with readline interface active
  */
@@ -37,17 +42,40 @@ function log () {
 * Function to get text input from user and send it to other peers
 * Like a chat :)
 */
+
 const askUser = async () => {
   rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
   })
 
-  rl.question('Send message: ', message => {
-    // Broadcast to peers
-    for (let id in peers) {
-      peers[id].conn.write(message)
+  rl.question('Send message: ', async message => {
+
+    const values = [];
+    //Run through n times more than the failures
+    for (let k = 1; k <= F+1; k++) {
+      // Broadcast to peers
+      for (let id in peers) {
+        const userMessage = JSON.stringify({ type: 'user', message })
+        peers[id].conn.write(userMessage)
+      }
+      // wait a given time because its supposed to be sync
+      await new Promise(resolve => setTimeout(resolve, 100))
+      
+      //get all replies
+      for (let id in peers) {
+        if (peers[id].replies) {
+          //push replies into values
+          values.push(... peers[id].replies)
+        }
+      }
     }
+
+    //decide based on the minimum value
+    const decide = Math.min(... values)
+
+    if(decide) log('the message has been seen by all peers')
+    else log('the message hasn\'t been seen by all peers')
     rl.close()
     rl = undefined
     askUser()
@@ -102,10 +130,20 @@ const sw = Swarm(config)
 
     conn.on('data', data => {
       // Here we handle incomming messages
-      log(
-        'Received Message from peer ' + peerId,
-        '----> ' + data.toString()
-      )
+
+      const parsedData = JSON.parse(data.toString())
+
+      if (parsedData.type === 'user') {
+        log(`Received Message from peer ${peerId}: ${parsedData.message}`)
+        const replyMessage = JSON.stringify({ type: 'reply', message: 1})
+        conn.write(replyMessage)
+      } else if (parsedData.type === 'reply') {
+        if (!peers[peerId].replied) {
+          peers[peerId].replies = []
+        }
+        peers[peerId].replies.push(parsedData.message)
+      }
+
     })
 
     conn.on('close', () => {
