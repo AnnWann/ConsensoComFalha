@@ -142,7 +142,11 @@ const sw = Swarm(config)
           conn.write(replyMessage)
         }
       } else if (parsedData.type === 'reply') {
-        if (!peers[peerId].replied) {
+        if(!processedMessages.has(parsedData.id)) {
+          const replyMessage = JSON.stringify({ type: 'reply', message: 0, id: parsedData.id })
+          conn.write(replyMessage)
+        }
+        if (!peers[peerId].replies) {
           peers[peerId].replies = []
         }
         peers[peerId].replies.push(parsedData.message)
