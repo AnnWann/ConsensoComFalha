@@ -3,11 +3,35 @@ import Swarm from'discovery-swarm'
 import defaults from'dat-swarm-defaults'
 import getPort from 'get-port'
 import readline from'readline'
+import { stringify } from 'querystring'
 
 /**
  * Here we will save our TCP peer connections
  * using the peer id as key: { peer_id: TCP_Connection }
  */
+
+
+/*-------------------------
+
+struct data = {
+  int ans;
+  char* peer
+}
+
+struct consensusState = {
+  data[] valuesi 
+  data[] valuesi_1
+  int r
+}
+data[] values 
+
+initialize() -> consensusState | valuesi == [rand()] and valuesi_1 == []
+
+runConsensus(consensusState, F)
+
+decide(consensusState) -> int
+*/
+
 const peers = {}
 // Counter for connections, used for identify connections
 let connSeq = 0
@@ -19,9 +43,7 @@ console.log('Your identity: ' + myId.toString('hex'))
 // reference to redline interface
 let rl
 
-// times of failure
-const F = 1
-
+const receivedMessages = new Set()
 /**
  * Function for safely call console.log with readline interface active
  */
@@ -34,52 +56,84 @@ function log () {
   for (let i = 0, len = arguments.length; i < len; i++) {
     console.log(arguments[i])
   }
-  askUser()
 }
 
-/*
-* Function to get text input from user and send it to other peers
-* Like a chat :)
-*/
-
-const askUser = async () => {
-  rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
+const subtractMap = (map1, map2) => {
+  const keys1 = Array.from(map1.keys())
+  const keys2 = Array.from(map2.keys())
+  keys1.forEach((key) => {
+    keys2.forEach((key2) => {
+      if(key === key2){
+        map1.delete(key)
+        return
+      }
+    })
   })
+}
 
-  rl.question('Send message: ', async message => {
-    const messageId = crypto.randomBytes(32).toString('hex')
-    const values = [];
-    //Run through n times more than the failures
-    for (let k = 1; k <= F+1; k++) {
-      // Broadcast to peers
-      for (let id in peers) {
-        const userMessage = JSON.stringify({ type: 'user', message, id: messageId })
-        peers[id].conn.write(userMessage)
-      }
-      // wait a given time because its supposed to be sync
-      await new Promise(resolve => setTimeout(resolve, 100))
-      
-      //get all replies
-      for (let id in peers) {
-        if (peers[id].replies) {
-          //push replies into values
-          values.push(... peers[id].replies)
-        }
-      }
+const initialize = (ip) => {
+  const map = new Map()
+
+  map.set(ip, crypto.randomInt(50))
+
+  return {
+    valuesCurrent: map,
+    valuesPrevious: new Map(),
+    r: 1
+  }
+}
+
+const decide = (consensusState) => {
+  if(!consensusState){
+    log("no State was produced")
+    return
+  }
+
+  if(!consensusState.valuesCurrent){
+    log("No values retrieved")
+    return
+  }
+
+  const values = Array.from(consensusState.valuesCurrent.values())
+  return Math.min(values)
+}
+  
+const runConsensus = (F) => {
+  
+  log("Consensus is deciding")
+  const state = initialize(myId)
+
+  while(state.r <= F) {
+    for(let id in peers){
+      peers[id].conn.write(JSON.stringify(stringify(subtractMap(state.valuesCurrent, state.valuesPrevious))))
     }
+    
+    const valuesNext = state.valuesCurrent
 
+    //ValuesNext U setV
 
-    //decide based on the minimum value
-    const decide = Math.min(... values)
+    setTimeout(() => {}, 10)
 
-    if(decide) log('the message has been seen by all peers')
-    else log('the message hasn\'t been seen by all peers')
-    rl.close()
-    rl = undefined
-    askUser()
-  });
+    const receivedMessagesArray = Array.from(receivedMessages.entries())
+    receivedMessagesArray.forEach(([key, value]) => {
+      valuesNext.set(key, value)
+    })
+
+    state.valuesPrevious = state.valuesCurrent
+    state.valuesCurrent = valuesNext
+    state.r++
+    
+  }
+
+  const decision = decide(state)
+
+  if(!decision){
+    log("no decision produced, retrying...")
+    runConsensus(F)
+    return 
+  }
+
+  log(`We decided that the answer is: ${decision}`)
 }
 
 /** 
@@ -128,39 +182,12 @@ const sw = Swarm(config)
       }
     }
 
-    const processedMessages = new Set()
-
     conn.on('data', data => {
       // Here we handle incomming messages
 
       const parsedData = JSON.parse(data.toString())
 
-      //simulate failure here by bypassing the message
-      // let parsedData = JSON.parse(data.toString())
-      // if(parsedData.type === 'user') parsedData.type = 'reply'
-
-      if (parsedData.type === 'user') {
-        if(!processedMessages.has(parsedData.id)) {
-          log(`Received Message from peer ${peerId}: \n----->${parsedData.message}`)
-          processedMessages.add(parsedData.id)
-          const replyMessage = JSON.stringify({ type: 'decision', message: 1, id: parsedData.id })
-          conn.write(replyMessage)
-        }
-      } else if (parsedData.type === 'reply') {
-        if(!processedMessages.has(parsedData.id)) {
-          const replyMessage = JSON.stringify({ type: 'decision', message: 0, id: parsedData.id })
-          conn.write(replyMessage)
-        }
-        if (!peers[peerId].replies) {
-          peers[peerId].replies = []
-        }
-        peers[peerId].replies.push(parsedData.message)
-      } else if (parsedData.type === 'decision') {
-        if (!peers[peerId].replies) {
-          peers[peerId].replies = []
-        }
-        peers[peerId].replies.push(parsedData.message)
-      }
+      receivedMessages.add(parsedData)
 
     })
 
@@ -180,10 +207,9 @@ const sw = Swarm(config)
     peers[peerId].conn = conn
     peers[peerId].seq = seq
     connSeq++
-
+    
   })
 
   // Read user message from command line
-  askUser()  
-
+  if(Object.keys(peers).length > 2) runConsensus(1)
 })()
