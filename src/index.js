@@ -2,8 +2,7 @@ import crypto from 'crypto'
 import Swarm from'discovery-swarm'
 import defaults from'dat-swarm-defaults'
 import getPort from 'get-port'
-import readline from'readline'
-import { stringify } from 'querystring'
+import * as readline from 'readline'
 
 /**
  * Here we will save our TCP peer connections
@@ -43,7 +42,7 @@ console.log('Your identity: ' + myId.toString('hex'))
 // reference to redline interface
 let rl
 
-const receivedMessages = new Set()
+let receivedMessages = []
 /**
  * Function for safely call console.log with readline interface active
  */
@@ -58,32 +57,17 @@ function log () {
   }
 }
 
-const subtractMap = (map1, map2) => {
-  const keys1 = Array.from(map1.keys())
-  const keys2 = Array.from(map2.keys())
-  keys1.forEach((key) => {
-    keys2.forEach((key2) => {
-      if(key === key2){
-        map1.delete(key)
-        return
-      }
-    })
-  })
-}
 
-const initialize = (ip) => {
-  const map = new Map()
-
-  map.set(ip, crypto.randomInt(50))
-
+const initialize = () => {
   return {
-    valuesCurrent: map,
-    valuesPrevious: new Map(),
+    valuesCurrent: [crypto.randomInt(50)],
+    valuesPrevious: [],
     r: 1
   }
 }
 
-const decide = (consensusState) => {
+
+const decide = () => {
   if(!consensusState){
     log("no State was produced")
     return
@@ -94,48 +78,78 @@ const decide = (consensusState) => {
     return
   }
 
-  const values = Array.from(consensusState.valuesCurrent.values())
-  return Math.min(values)
+  return Math.min(...consensusState.valuesCurrent)
 }
-  
-const runConsensus = (F) => {
-  
-  log("Consensus is deciding")
-  const state = initialize(myId)
 
-  while(state.r <= F) {
-    for(let id in peers){
-      peers[id].conn.write(JSON.stringify(stringify(subtractMap(state.valuesCurrent, state.valuesPrevious))))
+const runConsensus = async (F) => {
+
+  log("\nConsensus is deciding")
+
+  log("\nI have picked: " + consensusState.valuesCurrent[0])
+
+  while(consensusState.r <= F + 1) {
+    
+    const new_values = consensusState.valuesCurrent.filter(x => !consensusState.valuesPrevious.includes(x))
+    log('\nRound '+ consensusState.r+ ', I\'m sending: '+ new_values)
+
+    for(let id in peers)
+      peers[id].conn.write(JSON.stringify(new_values))
+    
+
+    await sleep(200)
+
+    const valuesNext = consensusState.valuesCurrent
+    valuesNext.push(...receivedMessages)
+
+    log('\nI got back: ' + receivedMessages + '\nSo I have: ' + valuesNext)
+
+    //Simulate failure
+    const willIDie = crypto.randomInt(100)
+  
+    if(willIDie > 94) {
+      log('oh nyoooo, I\'m dyinggggggggggg\n')
+      process.exit()
     }
-    
-    const valuesNext = state.valuesCurrent
 
-    //ValuesNext U setV
-
-    setTimeout(() => {}, 10)
-
-    const receivedMessagesArray = Array.from(receivedMessages.entries())
-    receivedMessagesArray.forEach(([key, value]) => {
-      valuesNext.set(key, value)
-    })
-
-    state.valuesPrevious = state.valuesCurrent
-    state.valuesCurrent = valuesNext
-    state.r++
-    
+    consensusState.valuesPrevious = consensusState.valuesCurrent
+    consensusState.valuesCurrent = valuesNext
+    consensusState.r++
+    receivedMessages = []
   }
 
-  const decision = decide(state)
-
+  const decision = decide()
   if(!decision){
-    log("no decision produced, retrying...")
-    runConsensus(F)
-    return 
+    log("\nno decision produced, retrying...")
+    flushState()
+    return
   }
 
-  log(`We decided that the answer is: ${decision}`)
+  log('\nAfter round '+ (consensusState.r - 1) + ', We have decided that the answer is: '+ decision + '\n')
+  log('-----------------------------------\n')
+  flushState()
+  
+  askUser()
+}
+const flushState = () => {
+  consensusState.valuesCurrent = [crypto.randomInt(50)]
+  consensusState.valuesPrevious = []
+  consensusState.r = 1
 }
 
+const askUser = () => {
+  rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  })
+
+  rl.question('Press any key to start', async _ => {
+    for(let id in peers){
+      peers[id].conn.write('go')
+    }
+    await sleep(10)
+    runConsensus(2)
+  });
+}
 /** 
  * Default DNS and DHT servers
  * This servers are used for peer discovery and establishing connection
@@ -150,7 +164,6 @@ const config = defaults({
  * discovery-channel library for peer discovery
  */
 const sw = Swarm(config)
-
 
 ;(async () => {
 
@@ -167,11 +180,11 @@ const sw = Swarm(config)
   sw.join('our-fun-channel')
 
   sw.on('connection', (conn, info) => {
+
     // Connection id
     const seq = connSeq
-
     const peerId = info.id.toString('hex')
-    log(`Connected #${seq} to peer: ${peerId}`)
+    //log(`Connected #${seq} to peer: ${peerId}`)
 
     // Keep alive TCP connection with peer
     if (info.initiator) {
@@ -182,18 +195,26 @@ const sw = Swarm(config)
       }
     }
 
-    conn.on('data', data => {
-      // Here we handle incomming messages
 
-      const parsedData = JSON.parse(data.toString())
+    conn.on('data', async data => {
+      // Here we handle incoming messages
 
-      receivedMessages.add(parsedData)
+      if(data.toString() === 'go'){
+        await sleep(10)
+        runConsensus(2)
+      }else{
+        const parsedData = JSON.parse(data.toString())
+
+        receivedMessages.push(...parsedData)
+      }
+
+      
 
     })
 
     conn.on('close', () => {
       // Here we handle peer disconnection
-      log(`Connection ${seq} closed, peer id: ${peerId}`)
+      //log(`Connection ${seq} closed, peer id: ${peerId}`)
       // If the closing connection is the last connection with the peer, removes the peer
       if (peers[peerId].seq === seq) {
         delete peers[peerId]
@@ -207,9 +228,37 @@ const sw = Swarm(config)
     peers[peerId].conn = conn
     peers[peerId].seq = seq
     connSeq++
+
     
   })
-
-  // Read user message from command line
-  if(Object.keys(peers).length > 2) runConsensus(1)
+  askUser()
 })()
+
+const consensusState = initialize()
+
+/* async function main() {
+  while(1){
+    await runConsensus(2)
+    const decision = decide()
+    if(!decision){
+      log("no decision produced, retrying...")
+      flushState()
+      continue
+    }
+  
+    log(`We decided that the answer is: ${decision}`)
+    flushState()
+    
+    await sleep(1000)
+  }
+} */
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+//main()
+
+
+
+
